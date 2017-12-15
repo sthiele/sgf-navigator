@@ -1,0 +1,7 @@
+[package]
+name = "sgf-navigator"
+version = "0.1.0"
+authors = ["Sven Thiele <sthiele78@gmail.com>"]
+
+[dependencies]
+sgf = "0.1.3"
