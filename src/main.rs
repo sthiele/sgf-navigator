@@ -8,6 +8,7 @@ use std::io;
 use std::io::prelude::*;
 use std::error::Error;
 use sgf::sgf_node::SgfCollection;
+use sgf::sgf_node::SgfNode;
 
 
 fn main() {
@@ -40,11 +41,10 @@ fn main() {
 
         if let Some(board) = get_board(&c){
 
-          let mut node = c.first();
           let mut game_count = 1;
           let mut ioin = io::stdin();
           for char in ioin.lock().chars() {
-//             show(node);
+             show_board(&board);
                     let c = char.unwrap();
                     match c {
                         'w' => { println!("You pressed char {:?}", c);  },
@@ -65,15 +65,24 @@ fn main() {
     }
 }
 
-struct Board {
+struct Board<'a> {
+  node: &'a SgfNode,
   field : std::vec::Vec<u8>,
 }
 
-fn get_board(c: &SgfCollection) -> Option<Board> {
+fn get_board<'a>(c: &'a SgfCollection) -> Option<Board<'a>> {
+    println!("collection: {}",c);
     if c.len() == 0 { () }
+    let node = c.first().unwrap();
     Some(Board {
+    node : node,
     field : vec![],
     })
+}
+
+fn show_board(b: &Board) {
+  let player = b.node.get_text("PB").unwrap();
+  println!("Player : {}",player);
 }
 
 
