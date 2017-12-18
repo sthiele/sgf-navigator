@@ -5,3 +5,4 @@ authors = ["Sven Thiele <sthiele78@gmail.com>"]
 
 [dependencies]
 sgf = "0.1.3"
+termion = "1"
