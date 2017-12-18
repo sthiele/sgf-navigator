@@ -102,10 +102,13 @@ struct Game<'a> {
     annotation: Option<String>,
     copyright: Option<String>,
     date: Option<String>,
+    place: Option<String>,
     event: Option<String>,
     round: Option<String>,
     game_name: Option<String>,
     game_info: Option<String>,
+    handicap: Option<i32>,
+    komi: Option<f32>,
     opening: Option<String>,
     rules: Option<RuleSet>,
     over_time: Option<String>,
@@ -152,10 +155,13 @@ fn get_board<'a>(node: &'a SgfNode) -> Result<Game<'a>, SgfError> {
         annotation: node.get_text("AN").ok(),
         copyright: node.get_text("CP").ok(),
         date: node.get_text("DT").ok(),
+        place: node.get_text("PC").ok(),
         event: node.get_text("EV").ok(),
         round: node.get_text("RO").ok(),
         game_name: node.get_text("GN").ok(),
         game_info: node.get_text("GC").ok(),
+        handicap: node.get_number("HA").ok(),
+        komi: node.get_real("KM").ok(),
         opening: node.get_text("ON").ok(),
         rules: match node.get_text("RU") {
             Ok(s) => {
@@ -200,12 +206,13 @@ fn show_board(game: &Game) {
     // collect_moves
     let moves = collect_moves(game.node, &game.path);
     for (x, y, i) in moves {
-        board[(x - 1) * game.width + y] = i;
+        println!("x: {} y: {} i: {}",x,y,i);
+        board[(y - 1) * game.width + x - 1] = i;
     }
 
-    for y in 1..game.height {
-        for x in 1..game.width {
-            match board[x * y - 1] {
+    for y in 1..(game.height+1) {
+        for x in 1..(game.width+1) {
+            match board[(x-1) * game.width + y - 1] {
                 0 => print!("+"),
                 1 => {
                     print!(
