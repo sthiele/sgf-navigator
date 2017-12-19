@@ -329,13 +329,13 @@ fn show_board(game: &Game) {
 
         for instr in instructions {
             if instr.is_move {
-            let (x,y) = instr.position;
-            board[y * game.width + x] = match instr.point {
-              Some(PointSt::White) => 1,
-              Some(PointSt::Black) => 2,
-              Some(PointSt::Free) => 0,
-              _ => panic!("Error: Expected PointSt"),
-             };
+                let (x, y) = instr.position;
+                board[y * game.width + x] = match instr.point {
+                    Some(PointSt::White) => 1,
+                    Some(PointSt::Black) => 2,
+                    Some(PointSt::Free) => 0,
+                    _ => panic!("Error: Expected PointSt"),
+                };
             }
         }
 
