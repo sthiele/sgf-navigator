@@ -14,22 +14,24 @@ use sgf::sgf_node::SgfError;
 
 use termion::clear;
 use termion::color;
+use Instruction::*;
 
+#[derive(Debug)]
 enum GoColor {
     White,
     Black,
 }
+#[derive(Debug)]
 enum PointSt {
     White,
     Black,
     Free,
 }
-struct Instruction {
-    is_move: bool,
-    annotation: Option<String>,
-    point: Option<PointSt>,
-    position: (usize, usize),
-    next_player: Option<GoColor>,
+#[derive(Debug)]
+enum Instruction {
+    Move((usize, usize), GoColor),
+    Setup((usize, usize), PointSt),
+    NextPlayer(GoColor),
 }
 
 fn main() {
@@ -216,7 +218,7 @@ fn get_board<'a>(node: &'a SgfNode) -> Result<Game<'a>, SgfError> {
 }
 
 fn show_board(game: &Game) {
-    println!("{}", clear::All);
+    //     println!("{}", clear::All);
 
     println!("path: {:?}", game.path);
     let mut previous = game.path.clone();
@@ -327,15 +329,23 @@ fn show_board(game: &Game) {
         // collect instructions
         let instructions = collect_moves(game.node, &game.path);
 
+        let mut next_player;
         for instr in instructions {
-            if instr.is_move {
-                let (x, y) = instr.position;
-                board[y * game.width + x] = match instr.point {
-                    Some(PointSt::White) => 1,
-                    Some(PointSt::Black) => 2,
-                    Some(PointSt::Free) => 0,
-                    _ => panic!("Error: Expected PointSt"),
-                };
+
+            match instr {
+                Move((x, y), GoColor::White) => {
+                    board[y * game.width + x] = 1;
+                    next_player = GoColor::Black;
+                }
+                Move((x, y), GoColor::Black) => {
+                    board[y * game.width + x] = 2;
+                    next_player = GoColor::White;
+                }
+                Setup((x, y), PointSt::White) => board[y * game.width + x] = 1,
+                Setup((x, y), PointSt::Black) => board[y * game.width + x] = 2,
+                Setup((x, y), PointSt::Free) => board[y * game.width + x] = 0,
+                NextPlayer(color) => next_player = color,               
+                i => panic!("Error: unexpected Instruction {:?}", i),
             }
         }
 
@@ -437,71 +447,36 @@ fn collect_moves<'a>(node: &'a SgfNode, path: &[usize]) -> Vec<Instruction> {
     if let Ok(list) = node.get_points("AW") {
         for s in list {
             let (x, y) = str_to_position(&s);
-            moves.push(Instruction {
-                is_move: false,
-                annotation: None,
-                point: Some(PointSt::White),
-                position: (x, y),
-                next_player: None,
-            })
+            moves.push(Setup((x, y), PointSt::White))
         }
     }
     if let Ok(list) = node.get_points("AB") {
         for s in list {
             let (x, y) = str_to_position(&s);
-            moves.push(Instruction {
-                is_move: false,
-                annotation: None,
-                point: Some(PointSt::Black),
-                position: (x, y),
-                next_player: None,
-            })
+            moves.push(Setup((x, y), PointSt::Black))
         }
     }
     if let Ok(list) = node.get_points("AE") {
         for s in list {
             let (x, y) = str_to_position(&s);
-            moves.push(Instruction {
-                is_move: false,
-                annotation: None,
-                point: Some(PointSt::Free),
-                position: (x, y),
-                next_player: None,
-            })
+            moves.push(Setup((x, y), PointSt::Free))
         }
     }
     if let Ok(c) = node.get_color("PL") {
         //TODO detect color
-        moves.push(Instruction {
-            is_move: false,
-            annotation: None,
-            point: None,
-            position: (0, 0),
-            next_player: None,
-        })
+        println!("set next player {}", c);
+        moves.push(NextPlayer(GoColor::White))
     }
 
 
     // move properties
     if let Ok(s) = node.get_point("W") {
         let (x, y) = str_to_position(&s);
-        moves.push(Instruction {
-            is_move: true,
-            annotation: None,
-            point: Some(PointSt::White),
-            position: (x, y),
-            next_player: Some(GoColor::Black),
-        })
+        moves.push(Move((x, y), GoColor::White))
     }
     if let Ok(s) = node.get_point("B") {
         let (x, y) = str_to_position(&s);
-        moves.push(Instruction {
-            is_move: true,
-            annotation: None,
-            point: Some(PointSt::Black),
-            position: (x, y),
-            next_player: Some(GoColor::White),
-        })
+        moves.push(Move((x, y), GoColor::Black))
     }
     if let Ok(_) = node.get_text("KO") {
         //TODO set move status to illegal
