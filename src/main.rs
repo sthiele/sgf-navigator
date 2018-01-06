@@ -329,6 +329,7 @@ fn show_board(game: &Game) {
         // collect instructions
         let instructions = collect_moves(game.node, &game.path);
 
+        // TODO: some state for the display
         let mut next_player;
         for instr in instructions {
 
