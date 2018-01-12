@@ -1,4 +1,5 @@
 #![feature(io)]
+extern crate petgraph;
 extern crate sgf;
 extern crate termion;
 
@@ -14,9 +15,13 @@ use sgf::sgf_node::SgfError;
 
 use termion::clear;
 use termion::color;
+
+use petgraph::Graph;
+use petgraph::algo::tarjan_scc;
+
 use Instruction::*;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum GoColor {
     White,
     Black,
@@ -34,91 +39,17 @@ enum Instruction {
     NextPlayer(GoColor),
 }
 
-fn main() {
-
-    // iterator to the command line options
-    let mut options = env::args();
-    if let Some(x) = options.nth(1) {
-
-        // Create a path to the file
-        let path = Path::new(&x);
-        let display = path.display();
-
-        // Open the path in read-only mode, returns `io::Result<File>`
-        let mut file = match File::open(&path) {
-            // The `description` method of `io::Error` returns a string that
-            // describes the error
-            Err(why) => panic!("couldn't open {}: {}", display, why.description()),
-            Ok(file) => file,
-        };
-
-        // Read the file contents into a string, returns `io::Result<usize>`
-        let mut s = String::new();
-        match file.read_to_string(&mut s) {
-            Err(why) => panic!("couldn't read {}: {}", display, why.description()),
-            Ok(_) => println!("{} read", display),
-        }
-
-        let c = SgfCollection::from_sgf(&s).expect("Error parsing SGF");
-
-        println!("collection of {} games: {}", c.len(), c);
-
-        if c.len() > 0 {
-            let sgf_game = c.first().unwrap();
-            let mut game_count = 1;
-            match get_board(&sgf_game) {
-                Ok(mut game) => {
-                    let mut ioin = io::stdin();
-                    for char in ioin.lock().chars() {
-                        show_board(&game);
-                        let c = char.unwrap();
-                        match c {
-                            'w' => {
-                                println!("You pressed char {:?}", c);
-                                previous_board(&mut game);
-                            }
-                            'a' => {
-                                println!("You pressed char {:?}", c);
-                                alt_left(&mut game);
-                            }
-                            's' => {
-                                println!("You pressed char {:?}", c);
-                                next_board(&mut game);
-                            }
-                            'd' => {
-                                println!("You pressed char {:?}", c);
-                                alt_right(&mut game);
-                            }
-                            'q' => {
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(m) => println!("some error: "),
-            }
-
-        } else {
-            println!("Empty SGF");
-        }
-    } else {
-        println!("Usage: sgf-reader filename");
-    }
-}
-
 enum RuleSet {
-    AGA, // rules of the American Go Association
-    GOE, // the Ing rules of Goe
+    AGA,      // rules of the American Go Association
+    GOE,      // the Ing rules of Goe
     Japanese, // the Nihon-Kiin rule set
-    NZ, // New Zealand rules
+    NZ,       // New Zealand rules
 }
 
-struct Game<'a> {
+struct Model<'a> {
     node: &'a SgfNode,
     path: std::vec::Vec<usize>,
 
-    app: Option<String>,
     annotation: Option<String>,
     copyright: Option<String>,
     date: Option<String>,
@@ -139,15 +70,9 @@ struct Game<'a> {
 
     width: usize,
     height: usize,
-    white_name: Option<String>,
-    white_team: Option<String>,
-    white_rank: Option<i32>,
-    black_name: Option<String>,
-    black_team: Option<String>,
-    black_rank: Option<i32>,
 }
 
-fn get_board<'a>(node: &'a SgfNode) -> Result<Game<'a>, SgfError> {
+fn get_board<'a>(node: &'a SgfNode) -> Result<Model<'a>, SgfError> {
     let char_set = node.get_text("CA");
     let file_format = node.get_number("FF");
     let game_type = node.get_number("GM").unwrap();
@@ -158,21 +83,19 @@ fn get_board<'a>(node: &'a SgfNode) -> Result<Game<'a>, SgfError> {
     //    let style = node.get_number("ST").unwrap();
     let (width, height) = match node.get_number("SZ") {
         Err(m) => {
-            //             println!("no quadratic field");
-            let (w, h) = node.get_number_number("SZ").expect(
-                "Error no field size defined!",
-            );
+            println!("no quadratic field");
+            let (w, h) = node.get_number_number("SZ")
+                .expect("Error no field size defined!");
             (w as usize, h as usize)
         }
         Ok(w) => (w as usize, w as usize),
     };
 
     // Root properties
-    Ok(Game {
+    Ok(Model {
         node: node,
         path: vec![],
 
-        app: node.get_text("AP").ok(),
         annotation: node.get_text("AN").ok(),
         copyright: node.get_text("CP").ok(),
         date: node.get_text("DT").ok(),
@@ -208,17 +131,50 @@ fn get_board<'a>(node: &'a SgfNode) -> Result<Game<'a>, SgfError> {
 
         width: width,
         height: height,
-        white_name: node.get_text("PW").ok(),
-        white_team: node.get_text("WT").ok(),
-        white_rank: node.get_number("WR").ok(),
-        black_name: node.get_text("PB").ok(),
-        black_team: node.get_text("BT").ok(),
-        black_rank: node.get_number("BR").ok(),
     })
 }
 
-fn show_board(game: &Game) {
-    //     println!("{}", clear::All);
+fn show_details(game: &Model) {
+    if let Ok(ref name) = game.node.get_text("AP") {
+        println!("Application: {}", name);
+    } else {
+        println!("Application:");
+    }
+}
+
+fn show_board(game: &Model) {
+    println!("{}", clear::All);
+
+    // show some root properties
+    if let Ok(ref name) = game.node.get_text("PW") {
+        print!("White: {}, ", name);
+    } else {
+        print!("White: Unknown, ");
+    }
+    if let Ok(ref name) = game.node.get_text("WT") {
+        print!("Team: {}, ", name);
+    }
+    if let Ok(ref rank) = game.node.get_text("WR") {
+        println!("Rank: {}", rank);
+    } else {
+        println!("Rank: ? ");
+    }
+    if let Ok(ref name) = game.node.get_text("PB") {
+        print!("Black: {}, ", name);
+    } else {
+        print!("Black: Unknown, ");
+    }
+    if let Ok(ref name) = game.node.get_text("BT") {
+        print!("Team: {}, ", name);
+    }
+    if let Ok(ref rank) = game.node.get_text("BR") {
+        println!("Rank: {}", rank);
+    } else {
+        println!("Rank: ? ");
+    }
+
+    let width = game.width;
+    let height = game.height;
 
     println!("path: {:?}", game.path);
     let mut previous = game.path.clone();
@@ -230,33 +186,201 @@ fn show_board(game: &Game) {
             panic!("Error invalid path.");
         }
     }
+
     if let Some(cur_node) = traverse(game.node, &game.path) {
+        let mut board = vec![0; width * height];
 
-        // Root properties
-        if let Some(ref name) = game.white_name {
-            print!("White: {} ", name);
-        } else {
-            print!("White: Unknown ");
-        }
-        if let Some(ref rank) = game.white_rank {
-            println!("Rank: {}", rank);
-        } else {
-            println!("Rank: ? ");
+        let mut white_connections = Graph::<usize, usize>::new();
+        let mut black_connections = Graph::<usize, usize>::new();
+
+        // collect instructions
+        let instructions = collect_moves(game.node, &game.path);
+
+        // TODO: some state for the display
+        let mut next_player = GoColor::White;
+        for instr in instructions {
+            match instr {
+                Move((x, y), GoColor::White) => {
+                    board[y * width + x] = 1;
+                    let mut neighbors = vec![];
+                    if x > 0 {
+                        neighbors.push(y * width + x.checked_sub(1).unwrap());
+                        if y > 0 {
+                            neighbors.push(
+                                y.checked_sub(1).unwrap() * width + x.checked_sub(1).unwrap(),
+                            );
+                        }
+                    }
+                    if y > 0 {
+                        neighbors.push(y.checked_sub(1).unwrap() * width + x);
+                    }
+                    if x + 1 < width {
+                        neighbors.push(y * width + x + 1);
+                        if y + 1 < height {
+                            neighbors.push(y + 1 * width + x + 1);
+                        }
+                    }
+                    if y + 1 < height {
+                        neighbors.push(y + 1 * width + x);
+                    }
+
+                    for pos in neighbors {
+                        if board[pos] == 1 {
+                            let a = white_connections.add_node(y * width + x);
+                            let b = white_connections.add_node(pos);
+                            let e = white_connections.add_edge(a, b, 1);
+                        }
+                    }
+
+                    next_player = GoColor::Black;
+                }
+                Move((x, y), GoColor::Black) => {
+                    board[y * width + x] = 2;
+                    let mut neighbors = vec![];
+                    if x > 0 {
+                        neighbors.push(y * width + x.checked_sub(1).unwrap());
+                        if y > 0 {
+                            neighbors.push(
+                                y.checked_sub(1).unwrap() * width + x.checked_sub(1).unwrap(),
+                            );
+                        }
+                    }
+                    if y > 0 {
+                        neighbors.push(y.checked_sub(1).unwrap() * width + x);
+                    }
+                    if x + 1 < width {
+                        neighbors.push(y * width + x + 1);
+                        if y + 1 < height {
+                            neighbors.push(y + 1 * width + x + 1);
+                        }
+                    }
+                    if y + 1 < height {
+                        neighbors.push(y + 1 * width + x);
+                    }
+
+                    for pos in neighbors {
+                        if board[pos] == 2 {
+                            let a = black_connections.add_node(y * width + x);
+                            let b = black_connections.add_node(pos);
+                            let e = black_connections.add_edge(a, b, 1);
+                        }
+                    }
+
+                    next_player = GoColor::White;
+                }
+                Setup((x, y), PointSt::White) => {
+                    board[y * width + x] = 1;
+
+                    let mut neighbors = vec![];
+                    if x > 0 {
+                        neighbors.push(y * width + x.checked_sub(1).unwrap());
+                        if y > 0 {
+                            neighbors.push(
+                                y.checked_sub(1).unwrap() * width + x.checked_sub(1).unwrap(),
+                            );
+                        }
+                    }
+                    if y > 0 {
+                        neighbors.push(y.checked_sub(1).unwrap() * width + x);
+                    }
+                    if x + 1 < width {
+                        neighbors.push(y * width + x + 1);
+                        if y + 1 < height {
+                            neighbors.push(y + 1 * width + x + 1);
+                        }
+                    }
+                    if y + 1 < height {
+                        neighbors.push(y + 1 * width + x);
+                    }
+
+                    for pos in neighbors {
+                        if board[pos] == 1 {
+                            let a = white_connections.add_node(y * width + x);
+                            let b = white_connections.add_node(pos);
+                            let e = white_connections.add_edge(a, b, 1);
+                        }
+                    }
+                }
+                Setup((x, y), PointSt::Black) => {
+                    board[y * width + x] = 2;
+                    let mut neighbors = vec![];
+                    if x > 0 {
+                        neighbors.push(y * width + x.checked_sub(1).unwrap());
+                        if y > 0 {
+                            neighbors.push(
+                                y.checked_sub(1).unwrap() * width + x.checked_sub(1).unwrap(),
+                            );
+                        }
+                    }
+                    if y > 0 {
+                        neighbors.push(y.checked_sub(1).unwrap() * width + x);
+                    }
+                    if x + 1 < width {
+                        neighbors.push(y * width + x + 1);
+                        if y + 1 < height {
+                            neighbors.push(y + 1 * width + x + 1);
+                        }
+                    }
+                    if y + 1 < height {
+                        neighbors.push(y + 1 * width + x);
+                    }
+
+                    for pos in neighbors {
+                        if board[pos] == 2 {
+                            let a = black_connections.add_node(y * width + x);
+                            let b = black_connections.add_node(pos);
+                            let e = black_connections.add_edge(a, b, 1);
+                        }
+                    }
+                }
+                Setup((x, y), PointSt::Free) => board[y * width + x] = 0,
+                NextPlayer(color) => next_player = color,
+                i => panic!("Error: unexpected Instruction {:?}", i),
+            }
         }
 
-        if let Some(ref name) = game.black_name {
-            print!("Black: {} ", name);
-        } else {
-            print!("Black: Unknown ");
-        }
-        if let Some(ref rank) = game.black_rank {
-            println!("Rank: {}", rank);
-        } else {
-            println!("Rank: ? ");
+        //compute scc's
+        if next_player == GoColor::White {
+            let mut hr = white_connections.into_edge_type::<petgraph::Undirected>();
+            let components = tarjan_scc(&hr);
+            for c in components {
+                println!("component:{:?}", c);
+            }
         }
 
+        if next_player == GoColor::Black {
+            let mut hr = black_connections.into_edge_type::<petgraph::Undirected>();
+            let components = tarjan_scc(&hr);
+            for c in components {
+                println!("component:{:?}", c);
+            }
+        }
 
-        // Node annotations properties
+        for y in 0..(height) {
+            for x in 0..width {
+                match board[y * width + x] {
+                    0 => print!("+"),
+                    1 => print!(
+                        "{red}●{reset}",
+                        red = color::Fg(color::Red),
+                        reset = color::Fg(color::Reset)
+                    ),
+                    2 => print!(
+                        "{blue}●{reset}",
+                        blue = color::Fg(color::Blue),
+                        reset = color::Fg(color::Reset)
+                    ),
+                    _ => println!(
+                        "{red}Unknown player{reset}",
+                        red = color::Fg(color::Red),
+                        reset = color::Fg(color::Reset)
+                    ),
+                }
+            }
+            println!();
+        }
+
+        // Show current node annotations
         if let Ok(node_name) = cur_node.get_simple_text("N") {
             println!("Node name: {}", node_name);
         }
@@ -324,68 +448,16 @@ fn show_board(game: &Game) {
         if let Ok(points) = cur_node.get_points("LN") {
             println!("lines: {:?}", points);
         }
-
-        let mut board = vec![0; game.width * game.height];
-        // collect instructions
-        let instructions = collect_moves(game.node, &game.path);
-
-        // TODO: some state for the display
-        let mut next_player;
-        for instr in instructions {
-
-            match instr {
-                Move((x, y), GoColor::White) => {
-                    board[y * game.width + x] = 1;
-                    next_player = GoColor::Black;
-                }
-                Move((x, y), GoColor::Black) => {
-                    board[y * game.width + x] = 2;
-                    next_player = GoColor::White;
-                }
-                Setup((x, y), PointSt::White) => board[y * game.width + x] = 1,
-                Setup((x, y), PointSt::Black) => board[y * game.width + x] = 2,
-                Setup((x, y), PointSt::Free) => board[y * game.width + x] = 0,
-                NextPlayer(color) => next_player = color,               
-                i => panic!("Error: unexpected Instruction {:?}", i),
-            }
-        }
-
-        for y in 0..(game.height) {
-            for x in 0..game.width {
-                match board[y * game.width + x] {
-                    0 => print!("+"),
-                    1 => {
-                        print!(
-                            "{red}●{reset}",
-                            red = color::Fg(color::Red),
-                            reset = color::Fg(color::Reset)
-                        )
-                    }
-                    2 => {
-                        print!(
-                            "{blue}●{reset}",
-                            blue = color::Fg(color::Blue),
-                            reset = color::Fg(color::Reset)
-                        )
-                    }
-                    _ => {
-                        println!(
-                            "{red}Unknown player{reset}",
-                            red = color::Fg(color::Red),
-                            reset = color::Fg(color::Reset)
-                        )
-                    }
-
-                }
-            }
-            println!("");
-        }
     } else {
         panic!("Error invalid path");
     }
 }
 
-fn next_board(game: &mut Game) {
+fn compute_black_groups() {}
+
+fn compute_white_groups() {}
+
+fn next_board(game: &mut Model) {
     game.path.push(0);
     if let Some(cur_node) = traverse(game.node, &game.path) {
 
@@ -395,8 +467,7 @@ fn next_board(game: &mut Game) {
     }
 }
 
-fn alt_right(game: &mut Game) {
-
+fn alt_right(game: &mut Model) {
     if let Some(mut last) = game.path.pop() {
         if let Some(node) = traverse(game.node, &game.path) {
             if last + 1 < node.children.len() {
@@ -409,8 +480,8 @@ fn alt_right(game: &mut Game) {
         }
     }
 }
-fn alt_left(game: &mut Game) {
 
+fn alt_left(game: &mut Model) {
     if let Some(mut last) = game.path.pop() {
         if last > 0 {
             game.path.push(last - 1);
@@ -420,7 +491,7 @@ fn alt_left(game: &mut Game) {
     }
 }
 
-fn previous_board(game: &mut Game) {
+fn previous_board(game: &mut Model) {
     game.path.pop();
 }
 
@@ -468,7 +539,6 @@ fn collect_moves<'a>(node: &'a SgfNode, path: &[usize]) -> Vec<Instruction> {
         println!("set next player {}", c);
         moves.push(NextPlayer(GoColor::White))
     }
-
 
     // move properties
     if let Ok(s) = node.get_point("W") {
@@ -566,7 +636,75 @@ fn char2int(c: char) -> usize {
     }
 }
 
+fn main() {
+    // iterator to the command line options
+    let mut options = env::args();
+    if let Some(x) = options.nth(1) {
+        // Create a path to the file
+        let path = Path::new(&x);
+        let display = path.display();
 
+        // Open the path in read-only mode, returns `io::Result<File>`
+        let mut file = match File::open(&path) {
+            // The `description` method of `io::Error` returns a string that
+            // describes the error
+            Err(why) => panic!("couldn't open {}: {}", display, why.description()),
+            Ok(file) => file,
+        };
+
+        // Read the file contents into a string, returns `io::Result<usize>`
+        let mut s = String::new();
+        match file.read_to_string(&mut s) {
+            Err(why) => panic!("couldn't read {}: {}", display, why.description()),
+            Ok(_) => println!("{} read", display),
+        }
+
+        let c = SgfCollection::from_sgf(&s).expect("Error parsing SGF");
+
+        println!("collection of {} games: {}", c.len(), c);
+
+        if c.len() > 0 {
+            let sgf_game = c.first().unwrap();
+            let mut game_count = 1;
+            match get_board(&sgf_game) {
+                Ok(mut game) => {
+                    let mut ioin = io::stdin();
+                    for char in ioin.lock().chars() {
+                        show_board(&game);
+                        let c = char.unwrap();
+                        match c {
+                            'w' => {
+                                println!("You pressed char {:?}", c);
+                                previous_board(&mut game);
+                            }
+                            'a' => {
+                                println!("You pressed char {:?}", c);
+                                alt_left(&mut game);
+                            }
+                            's' => {
+                                println!("You pressed char {:?}", c);
+                                next_board(&mut game);
+                            }
+                            'd' => {
+                                println!("You pressed char {:?}", c);
+                                alt_right(&mut game);
+                            }
+                            'q' => {
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Err(m) => println!("some error: "),
+            }
+        } else {
+            println!("Empty SGF");
+        }
+    } else {
+        println!("Usage: sgf-reader filename");
+    }
+}
 
 #[cfg(test)]
 mod tests {
